@@ -1,6 +1,9 @@
 package internal
 
-import "encoding/binary"
+import (
+	"bytes"
+	"encoding/binary"
+)
 
 const (
 	multiplier       = 0x5deece66d
@@ -20,23 +23,23 @@ func AccountSeed(seed, n uint64) []byte {
 	return r
 }
 
-func Message(seed []byte, n uint64) []byte {
+func Message(template []byte, n uint64) []byte {
 	l := int(n%maxMessageLength) + 1
 	r := make([]byte, l)
-	sl := len(seed)
-	for i := 0; i < l/sl+1; i++ {
-		e := (i + 1) * sl
-		if e > l {
-			e = l
-		}
-		copy(r[i*sl:e], seed)
-	}
-	nb := make([]byte, 4)
-	binary.LittleEndian.PutUint32(nb, uint32(n/maxMessageLength))
+	sb := make([]byte, 4)
+	binary.LittleEndian.PutUint32(sb, uint32(n/maxMessageLength))
 	e := 4
-	if l < 4 {
+	if l < e {
 		e = l
 	}
-	copy(r[:e], nb)
+	copy(r[:e], sb)
+
+	if l > 4 {
+		copy(r[4:], template)
+	}
 	return r
+}
+
+func Template(seed []byte) []byte {
+	return bytes.Repeat(seed, maxMessageLength/8)
 }

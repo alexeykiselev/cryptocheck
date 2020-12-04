@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -12,11 +13,13 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"sync"
+	"time"
 
 	"github.com/alexeykiselev/cryptocheck/internal"
 	"github.com/vardius/worker-pool/v2"
 	"github.com/wavesplatform/gowaves/pkg/crypto"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 const recordSize = 4 + 4 + 64
@@ -64,6 +67,8 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	p := message.NewPrinter(language.English)
+	start := time.Now()
 	var filename string
 	flag.StringVar(&filename, "filename", "", "Test parameters file")
 	flag.Parse()
@@ -80,7 +85,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	size := stat.Size()
-	if size < 8+recordSize {
+	if size < recordSize {
 		return errors.New(fmt.Sprintf("file too small %d", size))
 	}
 
@@ -90,23 +95,24 @@ func run(ctx context.Context) error {
 		return err
 	}
 	seedNumber := binary.BigEndian.Uint64(seed)
+	template := internal.Template(seed)
 	log.Printf("Seed: %s(%d)", hex.EncodeToString(seed), seedNumber)
 	size = size - 8
 	count := size / recordSize
-	log.Printf("Records count: %d", count)
+	log.Printf("Records count: %s", p.Sprintf("%d", count))
 	if size%recordSize != 0 {
 		return errors.New(fmt.Sprintf("invalid file size %d", size))
 	}
+	workers := runtime.NumCPU()
+	pool := workerpool.New(int(count) / workers)
 
-	wg := new(sync.WaitGroup)
-	wg.Add(int(count))
-
-	pool := workerpool.New(runtime.NumCPU()*2)
-
-	failures := make(chan error)
+	report := make(chan struct{}, workers)
+	failures := make(chan error, workers)
 
 	worker := func(r record) {
-		defer wg.Done()
+		defer func() {
+			report <- struct{}{}
+		}()
 		as := internal.AccountSeed(seedNumber, r.n)
 		sk := crypto.GenerateSecretKey(as)
 		pk := crypto.GeneratePublicKey(sk)
@@ -114,7 +120,7 @@ func run(ctx context.Context) error {
 			failures <- err
 			return
 		}
-		msg := internal.Message(seed, r.l)
+		msg := internal.Message(template, r.l)
 		if !crypto.Verify(pk, r.sig, msg) {
 			failures <- fmt.Errorf("invalid signature for record %s, message %s, pk %s, ",
 				r.String(), hex.EncodeToString(msg), pk.String())
@@ -122,31 +128,42 @@ func run(ctx context.Context) error {
 		}
 	}
 
-	for i := 0; i < runtime.NumCPU(); i++ {
+	for i := 0; i < workers; i++ {
 		if err := pool.AddWorker(worker); err != nil {
 			return err
 		}
 	}
 	defer pool.Stop()
 
-	go readRecords(ctx, f, pool, failures)
+	go readRecords(ctx, bufio.NewReader(f), pool, failures)
 
 	go func() {
 		for f := range failures {
 			log.Printf("CHECK FAILED: %v", f)
+			os.Exit(1)
 		}
 	}()
 
-	wg.Wait()
+	var done int64 = 0
+	for done < count {
+		select {
+		case <-report:
+			done++
+		case <-ctx.Done():
+			return fmt.Errorf("user termination")
+		}
+		if done%100000 == 0 {
+			log.Printf("%s records checked", p.Sprintf("%d", done))
+		}
 
-	log.Printf("DONE")
+	}
+	log.Printf("DONE %s recods in %s", p.Sprintf("%d", done), time.Since(start))
 
 	return nil
 }
 
 func readRecords(ctx context.Context, r io.Reader, pool workerpool.Pool, failures chan error) {
 	buf := make([]byte, recordSize)
-	c := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -171,10 +188,6 @@ func readRecords(ctx context.Context, r io.Reader, pool workerpool.Pool, failure
 			if err != nil {
 				failures <- err
 				return
-			}
-			c++
-			if c%100000 == 0 {
-				log.Printf("Checked %d records", c)
 			}
 		}
 	}

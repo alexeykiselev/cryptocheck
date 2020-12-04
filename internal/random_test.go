@@ -27,26 +27,28 @@ func TestRandomAccountSeed(t *testing.T) {
 }
 
 func TestMessage(t *testing.T) {
-	seed, err := hex.DecodeString("0df3bf5b0df3be500df3bf5b0df3b7500df3bf5b0df3be600df3bf5b0df2be52")
+	seed, err := hex.DecodeString("1234567890abcdef")
 	require.NoError(t, err)
+	template := Template(seed)
 	for _, test := range []struct {
-		s []byte
+		t []byte
 		n uint64
 		r string
 	}{
-		{seed, 0, "00"},
-		{seed, 1, "0000"},
-		{seed, 10, "000000000df3be500df3bf"},
-		{seed, 20, "000000000df3be500df3bf5b0df3b7500df3bf5b0d"},
-		{seed, 21, "000000000df3be500df3bf5b0df3b7500df3bf5b0df3"},
-		{seed, maxMessageLength, "01"},
-		{seed, 2*maxMessageLength, "02"},
-		{seed, maxMessageLength+1, "0100"},
-		{seed, 3*maxMessageLength+2, "030000"},
-		{seed, maxMessageLength+4, "010000000d"},
-		{seed, 2*maxMessageLength+4, "020000000d"},
+		{template, 0, "00"},
+		{template, 1, "0000"},
+		{template, 10, "000000001234567890abcd"},
+		{template, 20, "000000001234567890abcdef1234567890abcdef12"},
+		{template, 21, "000000001234567890abcdef1234567890abcdef1234"},
+		{template, 95, "000000001234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12345678"},
+		{template, maxMessageLength, "01"},
+		{template, 2 * maxMessageLength, "02"},
+		{template, maxMessageLength + 1, "0100"},
+		{template, 3*maxMessageLength + 2, "030000"},
+		{template, maxMessageLength + 4, "0100000012"},
+		{template, 2*maxMessageLength + 4, "0200000012"},
 	} {
-		r := Message(test.s, test.n)
+		r := Message(test.t, test.n)
 		assert.Equal(t, test.r, hex.EncodeToString(r))
 	}
 }
